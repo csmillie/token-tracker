@@ -1,0 +1,37 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: tokentracker
+      POSTGRES_USER: tokentracker
+      POSTGRES_PASSWORD: tokentracker
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tokentracker"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.115.0
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otel-collector-config.yaml
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+    environment:
+      # When Next.js runs on host, use host.docker.internal
+      # When Next.js runs in Docker, use http://nextjs:3046
+      INGEST_TRACES_ENDPOINT: "http://host.docker.internal:3046/api/ingest"
+      INGEST_LOGS_ENDPOINT: "http://host.docker.internal:3046/api/ingest/logs"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:
