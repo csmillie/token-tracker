@@ -120,6 +120,9 @@ export interface OverviewStats {
   active_sessions: number;
   tokens_by_model: { model: string; total: number }[];
   rolling_5h_total: number;
+  cache_read_today: number;
+  cache_read_this_week: number;
+  cache_read_5h: number;
 }
 
 export interface HourlyUsage {

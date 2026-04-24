@@ -6,6 +6,7 @@ import type {
   ProjectUsage,
   UsageEvent,
 } from "./types";
+import type { RowDataPacket } from "mysql2";
 
 // ── Overview stats ──
 
@@ -19,95 +20,104 @@ export async function getOverviewStats(): Promise<OverviewStats> {
   ]);
 
   return {
-    tokens_today: today,
-    tokens_this_week: week,
+    tokens_today: today.total,
+    tokens_this_week: week.total,
     active_sessions: active,
     tokens_by_model: byModel,
-    rolling_5h_total: rolling,
+    rolling_5h_total: rolling.total,
+    cache_read_today: today.cache_read,
+    cache_read_this_week: week.cache_read,
+    cache_read_5h: rolling.cache_read,
   };
 }
 
-export async function getTokensToday(): Promise<number> {
-  const { rows } = await pool.query(`
-    SELECT COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens), 0)::bigint AS total
+export async function getTokensToday(): Promise<{ total: number; cache_read: number }> {
+  const [rows] = await pool.query<RowDataPacket[]>(`
+    SELECT
+      COALESCE(SUM(input_tokens + output_tokens), 0) AS total,
+      COALESCE(SUM(cache_read_tokens), 0) AS cache_read
     FROM usage_events
-    WHERE ts >= CURRENT_DATE
+    WHERE ts >= CURDATE()
   `);
-  return Number(rows[0].total);
+  return { total: Number(rows[0].total), cache_read: Number(rows[0].cache_read) };
 }
 
-export async function getTokensThisWeek(): Promise<number> {
-  const { rows } = await pool.query(`
-    SELECT COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens), 0)::bigint AS total
+export async function getTokensThisWeek(): Promise<{ total: number; cache_read: number }> {
+  const [rows] = await pool.query<RowDataPacket[]>(`
+    SELECT
+      COALESCE(SUM(input_tokens + output_tokens), 0) AS total,
+      COALESCE(SUM(cache_read_tokens), 0) AS cache_read
     FROM usage_events
-    WHERE ts >= date_trunc('week', CURRENT_DATE)
+    WHERE ts >= DATE_SUB(CURDATE(), INTERVAL WEEKDAY(CURDATE()) DAY)
   `);
-  return Number(rows[0].total);
+  return { total: Number(rows[0].total), cache_read: Number(rows[0].cache_read) };
 }
 
 export async function getActiveSessionCount(): Promise<number> {
-  const { rows } = await pool.query(`
-    SELECT COUNT(*)::int AS count
+  const [rows] = await pool.query<RowDataPacket[]>(`
+    SELECT COUNT(*) AS count
     FROM sessions
-    WHERE is_active = TRUE
-      AND last_seen > NOW() - INTERVAL '30 minutes'
+    WHERE is_active = 1
+      AND last_seen > DATE_SUB(NOW(), INTERVAL 30 MINUTE)
   `);
-  return rows[0].count;
+  return Number(rows[0].count);
 }
 
 export async function getTokensByModel(): Promise<
   { model: string; total: number }[]
 > {
-  const { rows } = await pool.query(`
+  const [rows] = await pool.query<RowDataPacket[]>(`
     SELECT COALESCE(model, 'unknown') AS model,
-           SUM(input_tokens + output_tokens + cache_read_tokens)::bigint AS total
+           SUM(input_tokens + output_tokens) AS total
     FROM usage_events
-    WHERE ts >= CURRENT_DATE
+    WHERE ts >= CURDATE()
     GROUP BY model
     ORDER BY total DESC
   `);
-  return rows.map((r) => ({ model: r.model, total: Number(r.total) }));
+  return (rows as RowDataPacket[]).map((r) => ({ model: r.model, total: Number(r.total) }));
 }
 
-export async function getRolling5hTotal(): Promise<number> {
-  const { rows } = await pool.query(`
-    SELECT COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens), 0)::bigint AS total
+export async function getRolling5hTotal(): Promise<{ total: number; cache_read: number }> {
+  const [rows] = await pool.query<RowDataPacket[]>(`
+    SELECT
+      COALESCE(SUM(input_tokens + output_tokens), 0) AS total,
+      COALESCE(SUM(cache_read_tokens), 0) AS cache_read
     FROM usage_events
-    WHERE ts >= NOW() - INTERVAL '5 hours'
+    WHERE ts >= DATE_SUB(NOW(), INTERVAL 5 HOUR)
   `);
-  return Number(rows[0].total);
+  return { total: Number(rows[0].total), cache_read: Number(rows[0].cache_read) };
 }
 
 // ── Hourly usage (last 24h) ──
 
 export async function getHourlyUsage(): Promise<HourlyUsage[]> {
-  const { rows } = await pool.query(`
-    WITH hours AS (
-      SELECT generate_series(
-        date_trunc('hour', NOW() - INTERVAL '23 hours'),
-        date_trunc('hour', NOW()),
-        '1 hour'
-      ) AS hour
+  const [rows] = await pool.query<RowDataPacket[]>(`
+    WITH RECURSIVE hours AS (
+      SELECT DATE_FORMAT(DATE_SUB(NOW(), INTERVAL 23 HOUR), '%Y-%m-%d %H:00:00') AS hour
+      UNION ALL
+      SELECT DATE_ADD(hour, INTERVAL 1 HOUR)
+      FROM hours
+      WHERE hour < DATE_FORMAT(NOW(), '%Y-%m-%d %H:00:00')
     )
     SELECT
-      h.hour::text,
-      COALESCE(SUM(e.input_tokens), 0)::int AS input_tokens,
-      COALESCE(SUM(e.output_tokens), 0)::int AS output_tokens,
-      COALESCE(SUM(e.cache_read_tokens), 0)::int AS cache_read_tokens,
-      COALESCE(SUM(e.input_tokens + e.output_tokens + e.cache_read_tokens), 0)::int AS total
+      h.hour,
+      COALESCE(SUM(e.input_tokens), 0) AS input_tokens,
+      COALESCE(SUM(e.output_tokens), 0) AS output_tokens,
+      COALESCE(SUM(e.cache_read_tokens), 0) AS cache_read_tokens,
+      COALESCE(SUM(e.input_tokens + e.output_tokens), 0) AS total
     FROM hours h
     LEFT JOIN usage_events e
-      ON date_trunc('hour', e.ts) = h.hour
+      ON DATE_FORMAT(e.ts, '%Y-%m-%d %H:00:00') = h.hour
     GROUP BY h.hour
     ORDER BY h.hour
   `);
-  return rows;
+  return rows as HourlyUsage[];
 }
 
 // ── Active sessions ──
 
 export async function getActiveSessions(): Promise<ActiveSession[]> {
-  const { rows } = await pool.query(`
+  const [rows] = await pool.query<RowDataPacket[]>(`
     SELECT
       s.session_id,
       s.project_name,
@@ -117,24 +127,23 @@ export async function getActiveSessions(): Promise<ActiveSession[]> {
       s.last_seen,
       s.total_input_tokens,
       s.total_output_tokens,
-      -- Burn rate: tokens per hour over session lifetime (min 1 minute to avoid div/0)
       CASE
-        WHEN EXTRACT(EPOCH FROM (s.last_seen - s.first_seen)) > 60
-        THEN ((s.total_input_tokens + s.total_output_tokens)::float
-              / (EXTRACT(EPOCH FROM (s.last_seen - s.first_seen)) / 3600.0))::int
+        WHEN TIMESTAMPDIFF(SECOND, s.first_seen, s.last_seen) > 60
+        THEN FLOOR((s.total_input_tokens + s.total_output_tokens)
+              / (TIMESTAMPDIFF(SECOND, s.first_seen, s.last_seen) / 3600.0))
         ELSE 0
       END AS burn_rate
     FROM sessions s
-    WHERE s.is_active = TRUE
-      AND s.last_seen > NOW() - INTERVAL '2 hours'
+    WHERE s.is_active = 1
+      AND s.last_seen > DATE_SUB(NOW(), INTERVAL 2 HOUR)
     ORDER BY s.last_seen DESC
   `);
-  return rows.map((r) => ({
+  return (rows as RowDataPacket[]).map((r) => ({
     ...r,
     total_input_tokens: Number(r.total_input_tokens),
     total_output_tokens: Number(r.total_output_tokens),
     burn_rate: Number(r.burn_rate),
-  }));
+  })) as ActiveSession[];
 }
 
 // ── All sessions (recent) ──
@@ -142,7 +151,7 @@ export async function getActiveSessions(): Promise<ActiveSession[]> {
 export async function getRecentSessions(
   limit = 50
 ): Promise<ActiveSession[]> {
-  const { rows } = await pool.query(
+  const [rows] = await pool.query<RowDataPacket[]>(
     `
     SELECT
       s.session_id,
@@ -154,45 +163,45 @@ export async function getRecentSessions(
       s.total_input_tokens,
       s.total_output_tokens,
       CASE
-        WHEN EXTRACT(EPOCH FROM (s.last_seen - s.first_seen)) > 60
-        THEN ((s.total_input_tokens + s.total_output_tokens)::float
-              / (EXTRACT(EPOCH FROM (s.last_seen - s.first_seen)) / 3600.0))::int
+        WHEN TIMESTAMPDIFF(SECOND, s.first_seen, s.last_seen) > 60
+        THEN FLOOR((s.total_input_tokens + s.total_output_tokens)
+              / (TIMESTAMPDIFF(SECOND, s.first_seen, s.last_seen) / 3600.0))
         ELSE 0
       END AS burn_rate
     FROM sessions s
     ORDER BY s.last_seen DESC
-    LIMIT $1
+    LIMIT ?
   `,
     [limit]
   );
-  return rows.map((r) => ({
+  return (rows as RowDataPacket[]).map((r) => ({
     ...r,
     total_input_tokens: Number(r.total_input_tokens),
     total_output_tokens: Number(r.total_output_tokens),
     burn_rate: Number(r.burn_rate),
-  }));
+  })) as ActiveSession[];
 }
 
 // ── Per-project usage ──
 
 export async function getProjectUsage(): Promise<ProjectUsage[]> {
-  const { rows } = await pool.query(`
+  const [rows] = await pool.query<RowDataPacket[]>(`
     SELECT
       COALESCE(s.project_name, s.cwd, 'unknown') AS project_name,
-      SUM(s.total_input_tokens)::bigint AS total_input,
-      SUM(s.total_output_tokens)::bigint AS total_output,
-      SUM(s.total_input_tokens + s.total_output_tokens)::bigint AS total,
-      COUNT(DISTINCT s.session_id)::int AS session_count
+      SUM(s.total_input_tokens) AS total_input,
+      SUM(s.total_output_tokens) AS total_output,
+      SUM(s.total_input_tokens + s.total_output_tokens) AS total,
+      COUNT(DISTINCT s.session_id) AS session_count
     FROM sessions s
     GROUP BY COALESCE(s.project_name, s.cwd, 'unknown')
     ORDER BY total DESC
   `);
-  return rows.map((r) => ({
+  return (rows as RowDataPacket[]).map((r) => ({
     ...r,
     total_input: Number(r.total_input),
     total_output: Number(r.total_output),
     total: Number(r.total),
-  }));
+  })) as ProjectUsage[];
 }
 
 // ── Recent events for a session ──
@@ -201,16 +210,16 @@ export async function getSessionEvents(
   sessionId: string,
   limit = 100
 ): Promise<UsageEvent[]> {
-  const { rows } = await pool.query(
+  const [rows] = await pool.query<RowDataPacket[]>(
     `
     SELECT * FROM usage_events
-    WHERE session_id = $1
+    WHERE session_id = ?
     ORDER BY ts DESC
-    LIMIT $2
+    LIMIT ?
   `,
     [sessionId, limit]
   );
-  return rows;
+  return rows as UsageEvent[];
 }
 
 // ── Daily usage (last 30 days) for trends ──
@@ -218,31 +227,100 @@ export async function getSessionEvents(
 export async function getDailyUsage(): Promise<
   { day: string; input_tokens: number; output_tokens: number; total: number }[]
 > {
-  const { rows } = await pool.query(`
-    WITH days AS (
-      SELECT generate_series(
-        CURRENT_DATE - INTERVAL '29 days',
-        CURRENT_DATE,
-        '1 day'
-      )::date AS day
+  const [rows] = await pool.query<RowDataPacket[]>(`
+    WITH RECURSIVE days AS (
+      SELECT CURDATE() - INTERVAL 29 DAY AS day
+      UNION ALL
+      SELECT day + INTERVAL 1 DAY
+      FROM days
+      WHERE day < CURDATE()
     )
     SELECT
-      d.day::text,
-      COALESCE(SUM(e.input_tokens), 0)::bigint AS input_tokens,
-      COALESCE(SUM(e.output_tokens), 0)::bigint AS output_tokens,
-      COALESCE(SUM(e.input_tokens + e.output_tokens + e.cache_read_tokens), 0)::bigint AS total
+      CAST(d.day AS CHAR) AS day,
+      COALESCE(SUM(e.input_tokens), 0) AS input_tokens,
+      COALESCE(SUM(e.output_tokens), 0) AS output_tokens,
+      COALESCE(SUM(e.input_tokens + e.output_tokens), 0) AS total
     FROM days d
     LEFT JOIN usage_events e
-      ON e.ts::date = d.day
+      ON DATE(e.ts) = d.day
     GROUP BY d.day
     ORDER BY d.day
   `);
-  return rows.map((r) => ({
-    ...r,
+  return (rows as RowDataPacket[]).map((r) => ({
+    day: String(r.day),
     input_tokens: Number(r.input_tokens),
     output_tokens: Number(r.output_tokens),
     total: Number(r.total),
   }));
+}
+
+// ── Per-project token timeline (hourly, last 7 days) ──
+
+export async function getProjectTimeline(
+  projectName: string
+): Promise<
+  { hour: string; input_tokens: number; output_tokens: number; cache_read_tokens: number; total: number }[]
+> {
+  const [rows] = await pool.query<RowDataPacket[]>(
+    `
+    WITH RECURSIVE hours AS (
+      SELECT DATE_FORMAT(DATE_SUB(NOW(), INTERVAL 7 DAY), '%Y-%m-%d %H:00:00') AS hour
+      UNION ALL
+      SELECT DATE_ADD(hour, INTERVAL 1 HOUR)
+      FROM hours
+      WHERE hour < DATE_FORMAT(NOW(), '%Y-%m-%d %H:00:00')
+    )
+    SELECT
+      h.hour,
+      COALESCE(SUM(e.input_tokens), 0) AS input_tokens,
+      COALESCE(SUM(e.output_tokens), 0) AS output_tokens,
+      COALESCE(SUM(e.cache_read_tokens), 0) AS cache_read_tokens,
+      COALESCE(SUM(e.input_tokens + e.output_tokens), 0) AS total
+    FROM hours h
+    LEFT JOIN usage_events e
+      ON DATE_FORMAT(e.ts, '%Y-%m-%d %H:00:00') = h.hour
+      AND e.session_id IN (
+        SELECT session_id FROM sessions
+        WHERE COALESCE(project_name, cwd, 'unknown') = ?
+      )
+    GROUP BY h.hour
+    ORDER BY h.hour
+  `,
+    [projectName]
+  );
+  return rows as { hour: string; input_tokens: number; output_tokens: number; cache_read_tokens: number; total: number }[];
+}
+
+// ── GitHub activity for a project (last 7 days) ──
+
+export async function getProjectGitHubActivity(
+  projectName: string
+): Promise<{
+  commits: { sha: string; message: string; author: string; committed_at: string }[];
+  prs: { number: number; title: string; state: string; author: string; opened_at: string | null; merged_at: string | null }[];
+}> {
+  const [commits] = await pool.query<RowDataPacket[]>(
+    `SELECT sha, message, author, committed_at
+     FROM github_commits
+     WHERE project_name = ? AND committed_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+     ORDER BY committed_at`,
+    [projectName]
+  );
+
+  const [prs] = await pool.query<RowDataPacket[]>(
+    `SELECT number, title, state, author, opened_at, merged_at
+     FROM github_prs
+     WHERE project_name = ?
+       AND (opened_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+            OR merged_at >= DATE_SUB(NOW(), INTERVAL 7 DAY))
+     ORDER BY COALESCE(merged_at, opened_at)`,
+    [projectName]
+  );
+
+  return {
+    commits: commits as { sha: string; message: string; author: string; committed_at: string }[],
+    prs: prs as { number: number; title: string; state: string; author: string; opened_at: string | null; merged_at: string | null }[],
+  };
 }
 
 // ── Upsert session from hook or ingestion ──
@@ -257,12 +335,12 @@ export async function upsertSession(params: {
   await pool.query(
     `
     INSERT INTO sessions (session_id, project_name, cwd, git_branch, model)
-    VALUES ($1, $2, $3, $4, $5)
-    ON CONFLICT (session_id) DO UPDATE SET
-      project_name = COALESCE(EXCLUDED.project_name, sessions.project_name),
-      cwd = COALESCE(EXCLUDED.cwd, sessions.cwd),
-      git_branch = COALESCE(EXCLUDED.git_branch, sessions.git_branch),
-      model = COALESCE(EXCLUDED.model, sessions.model),
+    VALUES (?, ?, ?, ?, ?)
+    ON DUPLICATE KEY UPDATE
+      project_name = COALESCE(VALUES(project_name), project_name),
+      cwd = COALESCE(VALUES(cwd), cwd),
+      git_branch = COALESCE(VALUES(git_branch), git_branch),
+      model = COALESCE(VALUES(model), model),
       last_seen = NOW()
   `,
     [
@@ -290,15 +368,15 @@ export async function insertUsageEvent(params: {
   ts?: Date;
   raw_attributes?: Record<string, unknown> | null;
 }): Promise<void> {
-  const client = await pool.connect();
+  const conn = await pool.getConnection();
   try {
-    await client.query("BEGIN");
+    await conn.beginTransaction();
 
-    await client.query(
+    await conn.query(
       `INSERT INTO usage_events
         (session_id, model, input_tokens, output_tokens, cache_read_tokens, cache_create_tokens,
          span_name, trace_id, span_id, ts, raw_attributes)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+       VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
       [
         params.session_id,
         params.model ?? null,
@@ -315,32 +393,32 @@ export async function insertUsageEvent(params: {
     );
 
     // Update session totals
-    await client.query(
+    await conn.query(
       `UPDATE sessions SET
-        total_input_tokens = total_input_tokens + $2,
-        total_output_tokens = total_output_tokens + $3,
-        total_cache_read_tokens = total_cache_read_tokens + $4,
-        total_cache_create_tokens = total_cache_create_tokens + $5,
-        model = COALESCE($6, model),
+        total_input_tokens = total_input_tokens + ?,
+        total_output_tokens = total_output_tokens + ?,
+        total_cache_read_tokens = total_cache_read_tokens + ?,
+        total_cache_create_tokens = total_cache_create_tokens + ?,
+        model = COALESCE(?, model),
         last_seen = NOW(),
-        is_active = TRUE
-       WHERE session_id = $1`,
+        is_active = 1
+       WHERE session_id = ?`,
       [
-        params.session_id,
         params.input_tokens,
         params.output_tokens,
         params.cache_read_tokens,
         params.cache_create_tokens,
         params.model ?? null,
+        params.session_id,
       ]
     );
 
-    await client.query("COMMIT");
+    await conn.commit();
   } catch (err) {
-    await client.query("ROLLBACK");
+    await conn.rollback();
     throw err;
   } finally {
-    client.release();
+    conn.release();
   }
 }
 
@@ -359,7 +437,7 @@ export async function insertSnapshot(params: {
   await pool.query(
     `INSERT INTO session_snapshots
       (session_id, total_input_tokens, total_output_tokens, cwd, git_branch, project_name, event_type, raw_payload)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+     VALUES (?,?,?,?,?,?,?,?)`,
     [
       params.session_id,
       params.total_input_tokens ?? null,

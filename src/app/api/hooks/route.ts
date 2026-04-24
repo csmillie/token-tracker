@@ -41,7 +41,7 @@ export async function POST(request: NextRequest) {
     // Mark session inactive on SessionEnd
     if (payload.event_type === "SessionEnd") {
       await pool.query(
-        "UPDATE sessions SET is_active = FALSE, last_seen = NOW() WHERE session_id = $1",
+        "UPDATE sessions SET is_active = 0, last_seen = NOW() WHERE session_id = ?",
         [payload.session_id]
       );
     }

@@ -42,7 +42,7 @@ export default function Nav() {
         })}
       </div>
       <div className="p-4 border-t border-border text-xs text-text-muted">
-        localhost:3046
+        Local Dashboard
       </div>
     </nav>
   );

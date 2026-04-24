@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import pool from "@/lib/db";
+import type { RowDataPacket } from "mysql2";
 
 export const dynamic = "force-dynamic";
 
@@ -7,10 +8,10 @@ export async function GET() {
   const checks: Record<string, string> = {};
 
   try {
-    await pool.query("SELECT 1");
-    checks.postgres = "ok";
+    await pool.query<RowDataPacket[]>("SELECT 1");
+    checks.mysql = "ok";
   } catch {
-    checks.postgres = "error";
+    checks.mysql = "error";
   }
 
   try {
@@ -25,7 +26,7 @@ export async function GET() {
     checks.otel_collector = "unreachable";
   }
 
-  const healthy = checks.postgres === "ok";
+  const healthy = checks.mysql === "ok";
   return NextResponse.json(
     { healthy, checks },
     { status: healthy ? 200 : 503 }

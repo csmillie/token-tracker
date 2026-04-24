@@ -12,17 +12,9 @@ processors:
     send_batch_size: 100
 
 exporters:
-  otlphttp/traces:
-    traces_endpoint: ${env:INGEST_TRACES_ENDPOINT}
-    tls:
-      insecure: true
-    retry_on_failure:
-      enabled: true
-      initial_interval: 1s
-      max_interval: 30s
-
-  otlphttp/logs:
-    logs_endpoint: ${env:INGEST_LOGS_ENDPOINT}
+  otlphttp:
+    endpoint: ${env:INGEST_BASE_URL}
+    encoding: json
     tls:
       insecure: true
     retry_on_failure:
@@ -38,8 +30,8 @@ service:
     traces:
       receivers: [otlp]
       processors: [batch]
-      exporters: [otlphttp/traces, debug]
+      exporters: [otlphttp, debug]
     logs:
       receivers: [otlp]
       processors: [batch]
-      exporters: [otlphttp/logs, debug]
+      exporters: [otlphttp, debug]

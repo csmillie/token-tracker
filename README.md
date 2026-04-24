@@ -1,49 +1,75 @@
 # TokenTracker
 
-Local-first Claude Code token usage observability. Captures telemetry via OpenTelemetry, stores in Postgres, displays in a Next.js dashboard.
+Local-first Claude Code token usage observability. Captures telemetry via OpenTelemetry, stores in MySQL, displays in a Next.js dashboard. Correlates token usage with GitHub activity (commits, PRs) per project.
 
 ## Architecture
 
 ```
-Claude Code ──OTLP──→ OTel Collector ──OTLP/JSON──→ Next.js /api/ingest ──→ Postgres
-Claude Code hooks ──POST──→ Next.js /api/hooks ──→ Postgres
-Next.js dashboard ←── reads ←── Postgres
+Claude Code ──OTLP──→ OTel Collector ──HTTP/JSON──→ PHP ingest ──→ MySQL
+Claude Code ──OTLP──→ OTel Collector ──HTTP/JSON──→ Next.js /api/ingest ──→ MySQL
+Claude Code hooks ──POST──→ PHP /v1/session-meta ──→ MySQL
+Next.js dashboard ←── reads ←── MySQL
+GitHub API ──sync──→ MySQL (commits, PRs)
 ```
 
-Two parts:
+Two ingest paths:
 
-1. **Tracker** (required) — Postgres + OTel Collector in Docker. Captures and stores all token usage from Claude Code sessions via OpenTelemetry.
-2. **Web Dashboard** (optional) — Next.js app that reads from Postgres and shows charts, session tables, burn rates, and project breakdowns.
+1. **PHP ingest** (via Laravel Valet) — lightweight, always-on endpoint for OTel Collector and hook data
+2. **Next.js ingest** — alternative when running the dashboard's dev server
+
+Both write to the same MySQL database.
 
 ## Prerequisites
 
-- Docker and Docker Compose
+- MySQL 8.0+
 - Node.js 20+
+- PHP 8.1+ (for Valet ingest path, optional)
+- GitHub CLI (`gh`) authenticated (for GitHub sync, optional)
 - A shell where you run Claude Code (`zsh` or `bash`)
 
-## Part 1: Tracker Setup
-
-### 1.1 Start the infrastructure
+## Quick Start
 
 ```bash
-cd ~/WWW/tokentracker
-docker compose up -d
+git clone https://github.com/csmillie/token-tracker.git
+cd token-tracker
+
+# Configure database
+cp .env.example .env
+# Edit .env with your MySQL credentials
+
+# Install and migrate
+npm install
+npm run migrate
+
+# Start dashboard
+npm run dev
 ```
 
-This starts:
-- **Postgres** on port 5433 (data storage)
-- **OTel Collector** on ports 4317 (gRPC) / 4318 (HTTP) — receives telemetry from Claude Code
+Open [http://localhost:3046](http://localhost:3046).
 
-### 1.2 Initialize the database
+## Setup
+
+### 1. Database
+
+Create a MySQL database:
+
+```sql
+CREATE DATABASE tokentracker;
+```
+
+Copy `.env.example` to `.env` and set your credentials:
 
 ```bash
-npm install
+cp .env.example .env
+```
+
+Run migrations:
+
+```bash
 npm run migrate
 ```
 
-This creates the `sessions`, `usage_events`, and `session_snapshots` tables.
-
-### 1.3 Configure Claude Code telemetry
+### 2. Configure Claude Code Telemetry
 
 Add to your shell profile (`~/.zshrc` or `~/.bashrc`):
 
@@ -51,7 +77,7 @@ Add to your shell profile (`~/.zshrc` or `~/.bashrc`):
 export OTEL_EXPORTER_OTLP_ENDPOINT="http://localhost:4318"
 ```
 
-Then reload your shell:
+Reload your shell:
 
 ```bash
 source ~/.zshrc
@@ -59,9 +85,29 @@ source ~/.zshrc
 
 Claude Code will now export OpenTelemetry traces (including token usage) to the collector, which forwards them to the ingestion endpoint.
 
-### 1.4 Add hooks for supplemental metadata (optional)
+### 3. OTel Collector
 
-Hooks capture project context (cwd, git branch, project name) that isn't in the OTLP data. Add to `~/.claude/settings.json` — merge into existing `hooks` key if you have one:
+Start the collector (receives telemetry from Claude Code, forwards to ingest):
+
+```bash
+docker compose up -d
+```
+
+The collector listens on ports 4317 (gRPC) and 4318 (HTTP).
+
+Set `INGEST_BASE_URL` in your environment or `.env` to point at your ingest endpoint:
+
+```bash
+# For Valet PHP ingest:
+INGEST_BASE_URL=http://tokentracker.test
+
+# For Next.js ingest (default):
+INGEST_BASE_URL=http://localhost:3046
+```
+
+### 4. Hooks (Optional)
+
+Hooks capture project context (cwd, git branch, project name) that isn't in the OTLP data. Add to `~/.claude/settings.json`:
 
 ```json
 {
@@ -72,7 +118,7 @@ Hooks capture project context (cwd, git branch, project name) that isn't in the 
         "hooks": [
           {
             "type": "command",
-            "command": "HOOK_EVENT_TYPE=SessionStart bash ~/WWW/tokentracker/hooks/session-hook.sh"
+            "command": "HOOK_EVENT_TYPE=SessionStart bash /path/to/token-tracker/hooks/session-hook.sh"
           }
         ]
       }
@@ -83,7 +129,7 @@ Hooks capture project context (cwd, git branch, project name) that isn't in the 
         "hooks": [
           {
             "type": "command",
-            "command": "HOOK_EVENT_TYPE=Stop bash ~/WWW/tokentracker/hooks/session-hook.sh"
+            "command": "HOOK_EVENT_TYPE=Stop bash /path/to/token-tracker/hooks/session-hook.sh"
           }
         ]
       }
@@ -94,7 +140,7 @@ Hooks capture project context (cwd, git branch, project name) that isn't in the 
         "hooks": [
           {
             "type": "command",
-            "command": "HOOK_EVENT_TYPE=SessionEnd bash ~/WWW/tokentracker/hooks/session-hook.sh"
+            "command": "HOOK_EVENT_TYPE=SessionEnd bash /path/to/token-tracker/hooks/session-hook.sh"
           }
         ]
       }
@@ -103,65 +149,64 @@ Hooks capture project context (cwd, git branch, project name) that isn't in the 
 }
 ```
 
-> **Note:** Hooks require the web dashboard to be running (they POST to `/api/hooks`). Without the dashboard, hooks will silently fail (fire-and-forget) — no impact on Claude Code.
+Set `TOKENTRACKER_URL` in your environment if your ingest endpoint isn't at the default `http://localhost:3046`.
 
-### 1.5 Verify
+### 5. GitHub Sync (Optional)
 
-```bash
-# Check Postgres is up
-docker compose exec postgres pg_isready -U tokentracker
-
-# Check OTel Collector is receiving
-docker compose logs otel-collector --tail 20
-
-# Start a Claude Code session and do something — then check for data:
-docker compose exec postgres psql -U tokentracker -c "SELECT COUNT(*) FROM usage_events;"
-```
-
-## Part 2: Web Dashboard (Optional)
-
-The dashboard provides a visual interface for exploring token usage. You can run the tracker without it — data still flows into Postgres and you can query it directly.
-
-### 2.1 Start the dashboard
+Sync commits and PRs from GitHub to correlate with token usage:
 
 ```bash
-npm run dev
+# One-time: run migrations for GitHub tables
+npm run migrate
+
+# Sync all mapped projects
+npm run sync-github
 ```
 
-Open [http://localhost:3046](http://localhost:3046).
+Project-to-repo mappings are stored in the `project_repos` table. The sync script uses `gh` CLI and pulls the last 30 days of commits and PRs.
 
-### 2.2 Dashboard pages
+To run daily, add a cron job:
+
+```bash
+0 6 * * * cd /path/to/token-tracker && node scripts/sync-github.js
+```
+
+### 6. PHP Ingest via Valet (Optional)
+
+If you use Laravel Valet, link the project for an always-on ingest endpoint:
+
+```bash
+cd /path/to/token-tracker
+valet link tokentracker
+```
+
+The `LocalValetDriver.php` and `index.php` handle routing. The PHP ingest path doesn't require the Next.js dev server to be running.
+
+## Dashboard
+
+### Pages
 
 | Page | What it shows |
 |------|--------------|
-| **Overview** | Tokens today/week, active sessions, hourly usage chart, tokens by model |
-| **Sessions** | All sessions with live indicators, burn rate (tokens/hour), input/output counts |
+| **Overview** | Tokens today/week (cache read shown separately), active sessions, hourly usage chart, tokens by model |
+| **Sessions** | All sessions with burn rate (tokens/hour), input/output counts |
 | **Trends** | Hourly + daily charts, rolling 5-hour estimate, model distribution |
-| **Projects** | Usage by project/cwd with stacked bar chart and table |
+| **Projects** | Per-project usage with expandable timeline charts, GitHub commit/PR overlay |
 | **Health** | Service connectivity status, port reference, shell export snippet |
 
-### 2.3 API endpoints
-
-All return typed JSON. Useful for building your own tools or scripts.
+### API Endpoints
 
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
-| `/api/ingest` | POST | Receives OTLP trace data (JSON) |
-| `/api/ingest/logs` | POST | Receives OTLP log data (JSON) |
+| `/api/ingest` | POST | Receives OTLP trace data (JSON or protobuf) |
+| `/api/ingest/logs` | POST | Receives OTLP log data (JSON or protobuf) |
 | `/api/hooks` | POST | Receives Claude Code hook events |
 | `/api/overview` | GET | Overview stats |
 | `/api/sessions` | GET | Recent sessions (or `?session_id=X` for events) |
 | `/api/trends` | GET | Hourly/daily usage + rolling 5h total |
 | `/api/projects` | GET | Per-project usage |
+| `/api/projects/timeline` | GET | Project token timeline + GitHub activity (`?project=name`) |
 | `/api/health` | GET | System health check |
-
-## Quick Start (Everything at Once)
-
-```bash
-cd ~/WWW/tokentracker
-./scripts/bootstrap.sh   # Docker up + install + migrate
-npm run dev              # Dashboard at http://localhost:3046
-```
 
 ## Ports
 
@@ -170,85 +215,61 @@ npm run dev              # Dashboard at http://localhost:3046
 | Dashboard | 3046 |
 | OTel Collector gRPC | 4317 |
 | OTel Collector HTTP | 4318 |
-| Postgres | 5433 |
+| MySQL | 3306 (default) |
 
-## Database
+## Database Schema
 
-Schema in `migrations/001_init.sql`:
+Migrations in `migrations/`:
 
 - **sessions** — one row per Claude Code session, upserted on each event
 - **usage_events** — immutable append-only token usage records from OTLP spans
 - **session_snapshots** — point-in-time snapshots from hooks
+- **project_repos** — maps project names to GitHub owner/repo
+- **github_commits** — synced commit history per project
+- **github_prs** — synced PR history per project
 
-### Querying directly
-
-```bash
-docker compose exec postgres psql -U tokentracker
-```
+### Querying Directly
 
 ```sql
--- Tokens today
-SELECT SUM(input_tokens + output_tokens) FROM usage_events WHERE ts >= CURRENT_DATE;
+-- Tokens today (excluding cache reads)
+SELECT SUM(input_tokens + output_tokens) FROM usage_events WHERE ts >= CURDATE();
 
 -- Active sessions
-SELECT session_id, project_name, model, last_seen FROM sessions WHERE is_active AND last_seen > NOW() - INTERVAL '30 min';
+SELECT session_id, project_name, model, last_seen
+FROM sessions WHERE is_active = 1 AND last_seen > DATE_SUB(NOW(), INTERVAL 30 MINUTE);
 
 -- Hourly breakdown
-SELECT date_trunc('hour', ts) AS hour, SUM(input_tokens) AS input, SUM(output_tokens) AS output
-FROM usage_events WHERE ts >= CURRENT_DATE GROUP BY hour ORDER BY hour;
+SELECT DATE_FORMAT(ts, '%Y-%m-%d %H:00') AS hour, SUM(input_tokens) AS input, SUM(output_tokens) AS output
+FROM usage_events WHERE ts >= CURDATE() GROUP BY hour ORDER BY hour;
 
 -- By project
 SELECT COALESCE(project_name, cwd) AS project, SUM(total_input_tokens + total_output_tokens) AS total
 FROM sessions GROUP BY project ORDER BY total DESC;
-
--- Burn rate per session
-SELECT session_id, (total_input_tokens + total_output_tokens)::float
-  / GREATEST(EXTRACT(EPOCH FROM (last_seen - first_seen)) / 3600.0, 0.01) AS tokens_per_hour
-FROM sessions WHERE is_active ORDER BY tokens_per_hour DESC;
-```
-
-## Stopping and Restarting
-
-```bash
-# Stop everything
-docker compose down
-
-# Stop but keep data
-docker compose stop
-
-# Start again
-docker compose up -d
-
-# Nuke data and start fresh
-docker compose down -v
-docker compose up -d
-npm run migrate
 ```
 
 ## Troubleshooting
 
 **Dashboard shows "Database connection failed"**
-→ Run `docker compose up -d` then refresh.
+Check `.env` credentials and that MySQL is running.
 
 **No data appearing**
-→ Check `echo $OTEL_EXPORTER_OTLP_ENDPOINT` shows `http://localhost:4318`.
-→ Check collector logs: `docker compose logs otel-collector`.
-→ Check health page: http://localhost:3046/health.
+Check `echo $OTEL_EXPORTER_OTLP_ENDPOINT` shows `http://localhost:4318`.
+Check collector logs: `docker compose logs otel-collector`.
+Check health page: http://localhost:3046/health.
 
 **Collector shows "connection refused" to ingest endpoint**
-→ Dashboard must be running for OTLP export to succeed. Start `npm run dev` first.
-→ Without dashboard, collector retries automatically. No data lost — spans buffer in collector.
+Either the PHP Valet site or the Next.js dev server must be running to receive data.
 
-**Port conflict on 5433**
-→ Another Postgres on that port. Change port mapping in `docker-compose.yml` and `DATABASE_URL` in `.env`.
+## About the Author
 
-**Protobuf errors in ingest**
-→ Ingest endpoint only accepts JSON. OTLP HTTP protocol defaults to protobuf. If collector sends protobuf, returns 415 error. May need to configure collector exporter encoding.
+Built by Colin Smillie
 
-## Design Decisions
+- [colinsmillie.com](https://colinsmillie.com)
+- [www.ideawarehouse.ca](https://www.ideawarehouse.ca)
+- [www.evd2.ca](https://www.evd2.ca)
+- [www.modeltrust.app](https://www.modeltrust.app)
+- [www.freshnews.ca](https://www.freshnews.ca)
 
-- **Raw `pg` over ORM** — analytics queries (CTEs, `generate_series`, aggregations) much cleaner in SQL
-- **Server Components** — data fetched at render time, no client-side loading spinners
-- **Immutable usage_events** — append-only, never update. Enables accurate aggregation
-- **Session upsert** — concurrent sessions safely merge via `ON CONFLICT`
-- **Defensive attribute parsing** — checks multiple OTLP attribute key names (`gen_ai.usage.input_tokens`, `llm.usage.prompt_tokens`, etc.) since Claude Code's telemetry may evolve
+## License
+
+MIT

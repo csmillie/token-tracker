@@ -1,23 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
 import { parseLogsPayload } from "@/lib/otlp";
 import { upsertSession, insertUsageEvent } from "@/lib/queries";
+import { decodeProtobufLogs } from "@/lib/protobuf";
 import type { OtlpLogsPayload } from "@/lib/types";
 
-// Receives OTLP log data (JSON) from the OTel Collector.
-// Claude Code may emit token usage via logs in addition to traces.
+// Receives OTLP log data from the OTel Collector.
+// Handles both JSON and protobuf encodings.
 
 export async function POST(request: NextRequest) {
   try {
     const contentType = request.headers.get("content-type") ?? "";
 
+    let payload: OtlpLogsPayload;
     if (contentType.includes("protobuf")) {
-      return NextResponse.json(
-        { error: "Only JSON encoding supported" },
-        { status: 415 }
-      );
+      const buf = Buffer.from(await request.arrayBuffer());
+      payload = decodeProtobufLogs(buf);
+    } else {
+      payload = await request.json();
     }
-
-    const payload: OtlpLogsPayload = await request.json();
     const events = parseLogsPayload(payload);
 
     if (events.length === 0) {

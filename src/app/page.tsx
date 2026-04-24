@@ -31,7 +31,7 @@ export default async function OverviewPage() {
         <div className="bg-surface-raised border border-red/30 rounded-lg p-6 text-red">
           <p className="font-medium">Database connection failed</p>
           <p className="text-sm text-text-muted mt-2">
-            Make sure Postgres is running: <code>docker compose up -d</code>
+            Make sure MySQL is running and the database exists.
           </p>
           {error && (
             <pre className="text-xs mt-2 text-text-muted overflow-auto">
@@ -48,13 +48,21 @@ export default async function OverviewPage() {
       <h2 className="text-xl font-semibold mb-6">Overview</h2>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-        <StatsCard label="Tokens Today" value={stats.tokens_today} />
-        <StatsCard label="Tokens This Week" value={stats.tokens_this_week} />
+        <StatsCard
+          label="Tokens Today"
+          value={stats.tokens_today}
+          sub={`+ ${stats.cache_read_today.toLocaleString()} cache read`}
+        />
+        <StatsCard
+          label="Tokens This Week"
+          value={stats.tokens_this_week}
+          sub={`+ ${stats.cache_read_this_week.toLocaleString()} cache read`}
+        />
         <StatsCard label="Active Sessions" value={stats.active_sessions} />
         <StatsCard
           label="Rolling 5h Total"
           value={stats.rolling_5h_total}
-          sub="All sessions combined"
+          sub={`+ ${stats.cache_read_5h.toLocaleString()} cache read`}
         />
       </div>
 

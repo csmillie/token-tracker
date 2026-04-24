@@ -1,4 +1,5 @@
 import pool from "@/lib/db";
+import type { RowDataPacket } from "mysql2";
 
 export const dynamic = "force-dynamic";
 
@@ -6,15 +7,15 @@ async function checkHealth() {
   const checks: Record<string, { status: string; detail?: string }> = {};
 
   try {
-    const { rows } = await pool.query(
-      "SELECT COUNT(*)::int AS events, (SELECT COUNT(*)::int FROM sessions) AS sessions FROM usage_events"
+    const [rows] = await pool.query<RowDataPacket[]>(
+      "SELECT COUNT(*) AS events, (SELECT COUNT(*) FROM sessions) AS sessions FROM usage_events"
     );
-    checks.postgres = {
+    checks.mysql = {
       status: "ok",
       detail: `${rows[0].events} events, ${rows[0].sessions} sessions`,
     };
   } catch (e) {
-    checks.postgres = { status: "error", detail: String(e) };
+    checks.mysql = { status: "error", detail: String(e) };
   }
 
   try {
@@ -91,9 +92,9 @@ export default async function HealthPage() {
             </span>
           </div>
           <div className="flex justify-between">
-            <span className="text-text-muted">Postgres</span>
+            <span className="text-text-muted">MySQL</span>
             <span className="text-text-secondary font-mono">
-              localhost:5433
+              localhost:3306
             </span>
           </div>
           <div className="flex justify-between">

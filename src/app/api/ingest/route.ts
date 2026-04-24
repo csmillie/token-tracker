@@ -1,29 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
 import { parseTracePayload } from "@/lib/otlp";
 import { upsertSession, insertUsageEvent } from "@/lib/queries";
+import { decodeProtobufTraces } from "@/lib/protobuf";
 import type { OtlpTracePayload } from "@/lib/types";
 
-// Receives OTLP trace data (JSON) from the OTel Collector.
-// The collector's otlphttp exporter POSTs here.
-//
-// Content-Type may be application/json or application/x-protobuf.
-// We only handle JSON. If protobuf arrives, we log and skip.
+// Receives OTLP trace data from the OTel Collector.
+// Handles both JSON and protobuf encodings.
 
 export async function POST(request: NextRequest) {
   try {
     const contentType = request.headers.get("content-type") ?? "";
 
+    let payload: OtlpTracePayload;
     if (contentType.includes("protobuf")) {
-      console.warn(
-        "Received protobuf OTLP data. Configure collector with JSON encoding. Skipping."
-      );
-      return NextResponse.json(
-        { error: "Only JSON encoding supported. Set encoding: json in collector config." },
-        { status: 415 }
-      );
+      const buf = Buffer.from(await request.arrayBuffer());
+      payload = decodeProtobufTraces(buf);
+    } else {
+      payload = await request.json();
     }
-
-    const payload: OtlpTracePayload = await request.json();
     const events = parseTracePayload(payload);
 
     if (events.length === 0) {

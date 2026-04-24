@@ -12,7 +12,7 @@ export const dynamic = "force-dynamic";
 export default async function TrendsPage() {
   let hourly = null;
   let daily = null;
-  let rolling5h = 0;
+  let rolling5h = { total: 0, cache_read: 0 };
   let byModel: { model: string; total: number }[] = [];
   let error = null;
 
@@ -43,8 +43,8 @@ export default async function TrendsPage() {
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
         <StatsCard
           label="Rolling 5h Estimate"
-          value={rolling5h}
-          sub="All sessions"
+          value={rolling5h.total}
+          sub={`+ ${rolling5h.cache_read.toLocaleString()} cache read`}
         />
         <StatsCard
           label="Models Active Today"

@@ -88,12 +88,14 @@ const CACHE_READ_KEYS = [
   "gen_ai.usage.cache_read_input_tokens",
   "gen_ai.usage.cache_read_tokens",
   "cache_read_input_tokens",
+  "cache_read_tokens",
 ];
 
 const CACHE_CREATE_KEYS = [
   "gen_ai.usage.cache_creation_input_tokens",
   "gen_ai.usage.cache_creation_tokens",
   "cache_creation_input_tokens",
+  "cache_creation_tokens",
 ];
 
 const MODEL_KEYS = [

@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import {
   LineChart,
   Line,
@@ -35,6 +36,8 @@ interface HourlyData {
 }
 
 export function HourlyChart({ data }: { data: HourlyData[] }) {
+  const [showCache, setShowCache] = useState(false);
+
   const formatted = data.map((d) => ({
     ...d,
     label: new Date(d.hour).toLocaleTimeString([], {
@@ -43,11 +46,32 @@ export function HourlyChart({ data }: { data: HourlyData[] }) {
     }),
   }));
 
+  // Compute Y-axis domain based on whether cache is visible
+  const maxVal = Math.max(
+    ...formatted.map((d) =>
+      showCache
+        ? Math.max(d.input_tokens, d.output_tokens, d.cache_read_tokens)
+        : Math.max(d.input_tokens, d.output_tokens)
+    ),
+    1
+  );
+
   return (
     <div className="bg-surface-raised border border-border rounded-lg p-5">
-      <h3 className="text-sm font-medium text-text-secondary mb-4">
-        Hourly Token Usage (24h)
-      </h3>
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-sm font-medium text-text-secondary">
+          Hourly Token Usage (24h)
+        </h3>
+        <label className="flex items-center gap-2 text-xs text-text-muted cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={showCache}
+            onChange={(e) => setShowCache(e.target.checked)}
+            className="rounded border-border"
+          />
+          Show cache read
+        </label>
+      </div>
       <ResponsiveContainer width="100%" height={280}>
         <LineChart data={formatted}>
           <CartesianGrid strokeDasharray="3 3" stroke="#2e3345" />
@@ -57,7 +81,12 @@ export function HourlyChart({ data }: { data: HourlyData[] }) {
             fontSize={11}
             interval="preserveStartEnd"
           />
-          <YAxis stroke="#64748b" fontSize={11} tickFormatter={formatK} />
+          <YAxis
+            stroke="#64748b"
+            fontSize={11}
+            tickFormatter={formatK}
+            domain={[0, Math.ceil(maxVal * 1.1)]}
+          />
           <Tooltip
             contentStyle={{
               backgroundColor: "#1a1d27",
@@ -85,15 +114,17 @@ export function HourlyChart({ data }: { data: HourlyData[] }) {
             strokeWidth={2}
             dot={false}
           />
-          <Line
-            type="monotone"
-            dataKey="cache_read_tokens"
-            stroke={COLORS.cache}
-            name="Cache Read"
-            strokeWidth={1.5}
-            dot={false}
-            strokeDasharray="4 2"
-          />
+          {showCache && (
+            <Line
+              type="monotone"
+              dataKey="cache_read_tokens"
+              stroke={COLORS.cache}
+              name="Cache Read"
+              strokeWidth={1.5}
+              dot={false}
+              strokeDasharray="4 2"
+            />
+          )}
         </LineChart>
       </ResponsiveContainer>
     </div>

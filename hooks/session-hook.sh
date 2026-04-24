@@ -6,7 +6,7 @@
 # Receives hook event JSON on stdin.
 
 TRACKER_URL="${TOKENTRACKER_URL:-http://localhost:3046}"
-ENDPOINT="${TRACKER_URL}/api/hooks"
+ENDPOINT="${TRACKER_URL}/v1/session-meta"
 
 # Read stdin (hook event payload)
 INPUT=$(cat)

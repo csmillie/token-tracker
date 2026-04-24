@@ -10,7 +10,7 @@ export async function GET() {
       getDailyUsage(),
       getRolling5hTotal(),
     ]);
-    return NextResponse.json({ hourly, daily, rolling_5h_total: rolling5h });
+    return NextResponse.json({ hourly, daily, rolling_5h_total: rolling5h.total, cache_read_5h: rolling5h.cache_read });
   } catch (err) {
     console.error("Trends query error:", err);
     return NextResponse.json(
