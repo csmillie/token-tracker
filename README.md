@@ -1,30 +1,23 @@
 # TokenTracker
 
-Local-first Claude Code token usage observability. Captures telemetry via OpenTelemetry, stores in MySQL, displays in a Next.js dashboard. Correlates token usage with GitHub activity (commits, PRs) per project.
+Local-first Claude Code token usage dashboard. Captures telemetry directly from Claude Code's OpenTelemetry export, stores in MySQL, and displays in a Next.js dashboard. Correlates token usage with GitHub activity (commits, PRs) per project.
 
 ## Architecture
 
 ```
-Claude Code ──OTLP──→ OTel Collector ──HTTP/JSON──→ PHP ingest ──→ MySQL
-Claude Code ──OTLP──→ OTel Collector ──HTTP/JSON──→ Next.js /api/ingest ──→ MySQL
-Claude Code hooks ──POST──→ PHP /v1/session-meta ──→ MySQL
+Claude Code ──OTLP/HTTP──→ PHP ingest (/v1/traces, /v1/logs) ──→ MySQL
+Claude Code hooks ──POST──→ PHP ingest (/v1/session-meta) ──→ MySQL
 Next.js dashboard ←── reads ←── MySQL
 GitHub API ──sync──→ MySQL (commits, PRs)
 ```
 
-Two ingest paths:
-
-1. **PHP ingest** (via Laravel Valet) — lightweight, always-on endpoint for OTel Collector and hook data
-2. **Next.js ingest** — alternative when running the dashboard's dev server
-
-Both write to the same MySQL database.
+Claude Code exports OpenTelemetry data directly to a PHP endpoint. A lightweight PHP router receives both OTLP telemetry (token usage per API call) and hook events (session metadata like project name, git branch). The Next.js dashboard reads from MySQL and renders charts and tables.
 
 ## Prerequisites
 
 - MySQL 8.0+
 - Node.js 20+
-- PHP 8.1+ (for Valet ingest path, optional)
-- GitHub CLI (`gh`) authenticated (for GitHub sync, optional)
+- PHP 8.1+ with a web server (Laravel Valet, MAMP, or any PHP server)
 - A shell where you run Claude Code (`zsh` or `bash`)
 
 ## Quick Start
@@ -69,12 +62,27 @@ Run migrations:
 npm run migrate
 ```
 
-### 2. Configure Claude Code Telemetry
+### 2. PHP Ingest Endpoint
+
+The PHP ingest endpoint receives data from Claude Code. You need a PHP web server pointing at the project root. With Laravel Valet:
+
+```bash
+cd /path/to/token-tracker
+valet link tokentracker
+# Now available at http://tokentracker.test
+```
+
+The `LocalValetDriver.php` and `index.php` handle routing. Any PHP server that routes all requests to `index.php` will work.
+
+### 3. Configure Claude Code Telemetry
 
 Add to your shell profile (`~/.zshrc` or `~/.bashrc`):
 
 ```bash
-export OTEL_EXPORTER_OTLP_ENDPOINT="http://localhost:4318"
+# Point Claude Code's OTLP export at your PHP ingest endpoint
+export OTEL_EXPORTER_OTLP_ENDPOINT="http://tokentracker.test"
+export OTEL_EXPORTER_OTLP_PROTOCOL="http/json"
+export OTEL_LOGS_EXPORTER="otlp"
 ```
 
 Reload your shell:
@@ -83,31 +91,11 @@ Reload your shell:
 source ~/.zshrc
 ```
 
-Claude Code will now export OpenTelemetry traces (including token usage) to the collector, which forwards them to the ingestion endpoint.
+Claude Code will now send token usage data directly to the PHP endpoint on every API call.
 
-### 3. OTel Collector
+### 4. Session Hooks
 
-Start the collector (receives telemetry from Claude Code, forwards to ingest):
-
-```bash
-docker compose up -d
-```
-
-The collector listens on ports 4317 (gRPC) and 4318 (HTTP).
-
-Set `INGEST_BASE_URL` in your environment or `.env` to point at your ingest endpoint:
-
-```bash
-# For Valet PHP ingest:
-INGEST_BASE_URL=http://tokentracker.test
-
-# For Next.js ingest (default):
-INGEST_BASE_URL=http://localhost:3046
-```
-
-### 4. Hooks (Optional)
-
-Hooks capture project context (cwd, git branch, project name) that isn't in the OTLP data. Add to `~/.claude/settings.json`:
+Add hooks to `~/.claude/settings.json` to capture session metadata (project name, git branch, cwd). Update the path and URL to match your setup:
 
 ```json
 {
@@ -118,7 +106,7 @@ Hooks capture project context (cwd, git branch, project name) that isn't in the 
         "hooks": [
           {
             "type": "command",
-            "command": "HOOK_EVENT_TYPE=SessionStart bash /path/to/token-tracker/hooks/session-hook.sh"
+            "command": "HOOK_EVENT_TYPE=SessionStart TOKENTRACKER_URL=http://tokentracker.test bash /path/to/token-tracker/hooks/session-hook.sh"
           }
         ]
       }
@@ -129,7 +117,7 @@ Hooks capture project context (cwd, git branch, project name) that isn't in the 
         "hooks": [
           {
             "type": "command",
-            "command": "HOOK_EVENT_TYPE=Stop bash /path/to/token-tracker/hooks/session-hook.sh"
+            "command": "HOOK_EVENT_TYPE=Stop TOKENTRACKER_URL=http://tokentracker.test bash /path/to/token-tracker/hooks/session-hook.sh"
           }
         ]
       }
@@ -140,7 +128,7 @@ Hooks capture project context (cwd, git branch, project name) that isn't in the 
         "hooks": [
           {
             "type": "command",
-            "command": "HOOK_EVENT_TYPE=SessionEnd bash /path/to/token-tracker/hooks/session-hook.sh"
+            "command": "HOOK_EVENT_TYPE=SessionEnd TOKENTRACKER_URL=http://tokentracker.test bash /path/to/token-tracker/hooks/session-hook.sh"
           }
         ]
       }
@@ -148,39 +136,6 @@ Hooks capture project context (cwd, git branch, project name) that isn't in the 
   }
 }
 ```
-
-Set `TOKENTRACKER_URL` in your environment if your ingest endpoint isn't at the default `http://localhost:3046`.
-
-### 5. GitHub Sync (Optional)
-
-Sync commits and PRs from GitHub to correlate with token usage:
-
-```bash
-# One-time: run migrations for GitHub tables
-npm run migrate
-
-# Sync all mapped projects
-npm run sync-github
-```
-
-Project-to-repo mappings are stored in the `project_repos` table. The sync script uses `gh` CLI and pulls the last 30 days of commits and PRs.
-
-To run daily, add a cron job:
-
-```bash
-0 6 * * * cd /path/to/token-tracker && node scripts/sync-github.js
-```
-
-### 6. PHP Ingest via Valet (Optional)
-
-If you use Laravel Valet, link the project for an always-on ingest endpoint:
-
-```bash
-cd /path/to/token-tracker
-valet link tokentracker
-```
-
-The `LocalValetDriver.php` and `index.php` handle routing. The PHP ingest path doesn't require the Next.js dev server to be running.
 
 ## Dashboard
 
@@ -192,37 +147,28 @@ The `LocalValetDriver.php` and `index.php` handle routing. The PHP ingest path d
 | **Sessions** | All sessions with burn rate (tokens/hour), input/output counts |
 | **Trends** | Hourly + daily charts, rolling 5-hour estimate, model distribution |
 | **Projects** | Per-project usage with expandable timeline charts, GitHub commit/PR overlay |
-| **Health** | Service connectivity status, port reference, shell export snippet |
+| **Health** | Service connectivity status, configuration reference |
 
 ### API Endpoints
 
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
-| `/api/ingest` | POST | Receives OTLP trace data (JSON or protobuf) |
-| `/api/ingest/logs` | POST | Receives OTLP log data (JSON or protobuf) |
-| `/api/hooks` | POST | Receives Claude Code hook events |
-| `/api/overview` | GET | Overview stats |
-| `/api/sessions` | GET | Recent sessions (or `?session_id=X` for events) |
-| `/api/trends` | GET | Hourly/daily usage + rolling 5h total |
-| `/api/projects` | GET | Per-project usage |
-| `/api/projects/timeline` | GET | Project token timeline + GitHub activity (`?project=name`) |
-| `/api/health` | GET | System health check |
-
-## Ports
-
-| Service | Port |
-|---------|------|
-| Dashboard | 3046 |
-| OTel Collector gRPC | 4317 |
-| OTel Collector HTTP | 4318 |
-| MySQL | 3306 (default) |
+| `/v1/traces` | POST | Receives OTLP trace data (JSON) — PHP |
+| `/v1/logs` | POST | Receives OTLP log data (JSON) — PHP |
+| `/v1/session-meta` | POST | Receives hook session metadata — PHP |
+| `/api/overview` | GET | Overview stats — Next.js |
+| `/api/sessions` | GET | Recent sessions — Next.js |
+| `/api/trends` | GET | Hourly/daily usage — Next.js |
+| `/api/projects` | GET | Per-project usage — Next.js |
+| `/api/projects/timeline` | GET | Project token timeline + GitHub activity — Next.js |
+| `/api/health` | GET | System health check — Next.js |
 
 ## Database Schema
 
 Migrations in `migrations/`:
 
 - **sessions** — one row per Claude Code session, upserted on each event
-- **usage_events** — immutable append-only token usage records from OTLP spans
+- **usage_events** — immutable append-only token usage records
 - **session_snapshots** — point-in-time snapshots from hooks
 - **project_repos** — maps project names to GitHub owner/repo
 - **github_commits** — synced commit history per project
@@ -253,12 +199,9 @@ FROM sessions GROUP BY project ORDER BY total DESC;
 Check `.env` credentials and that MySQL is running.
 
 **No data appearing**
-Check `echo $OTEL_EXPORTER_OTLP_ENDPOINT` shows `http://localhost:4318`.
-Check collector logs: `docker compose logs otel-collector`.
+Check `echo $OTEL_EXPORTER_OTLP_ENDPOINT` points at your PHP ingest URL.
 Check health page: http://localhost:3046/health.
-
-**Collector shows "connection refused" to ingest endpoint**
-Either the PHP Valet site or the Next.js dev server must be running to receive data.
+Verify PHP endpoint works: `curl http://tokentracker.test/healthz`
 
 ## About the Author
 
