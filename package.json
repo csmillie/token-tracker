@@ -10,7 +10,6 @@
     "sync-github": "node scripts/sync-github.js"
   },
   "dependencies": {
-    "@opentelemetry/otlp-transformer": "^0.214.0",
     "next": "^15.3.0",
     "mysql2": "^3.11.0",
     "react": "^19.0.0",
