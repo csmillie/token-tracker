@@ -1,17 +1,17 @@
 # TokenTracker
 
-Local-first Claude Code token usage dashboard. Captures telemetry directly from Claude Code's OpenTelemetry export, stores in MySQL, and displays in a Next.js dashboard. Correlates token usage with GitHub activity (commits, PRs) per project.
+Local-first Claude Code token usage dashboard. Captures telemetry from Claude Code, stores in MySQL, and displays in a Next.js dashboard. Correlates token usage with GitHub activity (commits, PRs) per project.
 
 ## Architecture
 
 ```
-Claude Code ──OTLP/HTTP──→ PHP ingest (/v1/traces, /v1/logs) ──→ MySQL
+Claude Code ──HTTP/JSON──→ PHP ingest (/v1/traces, /v1/logs) ──→ MySQL
 Claude Code hooks ──POST──→ PHP ingest (/v1/session-meta) ──→ MySQL
 Next.js dashboard ←── reads ←── MySQL
 GitHub API ──sync──→ MySQL (commits, PRs)
 ```
 
-Claude Code exports OpenTelemetry data directly to a PHP endpoint. A lightweight PHP router receives both OTLP telemetry (token usage per API call) and hook events (session metadata like project name, git branch). The Next.js dashboard reads from MySQL and renders charts and tables.
+Claude Code sends telemetry directly to a PHP endpoint. A lightweight PHP router receives both token usage data (per API call) and hook events (session metadata like project name, git branch). The Next.js dashboard reads from MySQL and renders charts and tables.
 
 ## Prerequisites
 
@@ -79,7 +79,7 @@ The `LocalValetDriver.php` and `index.php` handle routing. Any PHP server that r
 Add to your shell profile (`~/.zshrc` or `~/.bashrc`):
 
 ```bash
-# Claude Code Tracking — sends OTLP directly to PHP ingest
+# Claude Code Tracking — sends telemetry directly to PHP ingest
 export CLAUDE_CODE_ENABLE_TELEMETRY=1
 export OTEL_METRICS_EXPORTER=otlp
 export OTEL_LOGS_EXPORTER=otlp
@@ -87,7 +87,7 @@ export OTEL_EXPORTER_OTLP_ENDPOINT="http://tokentracker.test"
 export OTEL_EXPORTER_OTLP_PROTOCOL=http/json
 ```
 
-Replace `http://tokentracker.test` with your PHP ingest URL (e.g. `http://localhost:3046` if using the Next.js dev server directly).
+Replace `http://tokentracker.test` with your PHP ingest URL.
 
 Reload your shell:
 
@@ -157,9 +157,9 @@ Add hooks to `~/.claude/settings.json` to capture session metadata (project name
 
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
-| `/v1/traces` | POST | Receives OTLP trace data (JSON) — PHP |
-| `/v1/logs` | POST | Receives OTLP log data (JSON) — PHP |
-| `/v1/session-meta` | POST | Receives hook session metadata — PHP |
+| `/v1/traces` | POST | Receives trace data (JSON) — PHP |
+| `/v1/logs` | POST | Receives log data (JSON) — PHP |
+| `/v1/session-meta` | POST | Receives hook session metadata — PHP / Next.js |
 | `/api/overview` | GET | Overview stats — Next.js |
 | `/api/sessions` | GET | Recent sessions — Next.js |
 | `/api/trends` | GET | Hourly/daily usage — Next.js |
@@ -203,7 +203,7 @@ FROM sessions GROUP BY project ORDER BY total DESC;
 Check `.env` credentials and that MySQL is running.
 
 **No data appearing**
-Check `echo $OTEL_EXPORTER_OTLP_ENDPOINT` points at your PHP ingest URL.
+Check `echo $OTEL_EXPORTER_OTLP_ENDPOINT` in your shell points at your PHP ingest URL.
 Check health page: http://localhost:3046/health.
 Verify PHP endpoint works: `curl http://tokentracker.test/healthz`
 

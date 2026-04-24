@@ -14,18 +14,6 @@ export async function GET() {
     checks.mysql = "error";
   }
 
-  try {
-    const res = await fetch("http://localhost:4318/v1/traces", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ resourceSpans: [] }),
-      signal: AbortSignal.timeout(2000),
-    });
-    checks.otel_collector = res.ok ? "ok" : `status ${res.status}`;
-  } catch {
-    checks.otel_collector = "unreachable";
-  }
-
   const healthy = checks.mysql === "ok";
   return NextResponse.json(
     { healthy, checks },

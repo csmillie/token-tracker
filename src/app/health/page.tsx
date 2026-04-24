@@ -18,21 +18,6 @@ async function checkHealth() {
     checks.mysql = { status: "error", detail: String(e) };
   }
 
-  try {
-    const res = await fetch("http://localhost:4318", {
-      signal: AbortSignal.timeout(2000),
-    });
-    checks.otel_collector = {
-      status: "reachable",
-      detail: `HTTP ${res.status}`,
-    };
-  } catch {
-    checks.otel_collector = {
-      status: "unreachable",
-      detail: "Cannot reach localhost:4318",
-    };
-  }
-
   return checks;
 }
 
@@ -59,7 +44,7 @@ export default async function HealthPage() {
             </div>
             <span
               className={`px-3 py-1 rounded-full text-xs font-medium ${
-                check.status === "ok" || check.status === "reachable"
+                check.status === "ok"
                   ? "bg-green/10 text-green"
                   : "bg-red/10 text-red"
               }`}
@@ -80,33 +65,21 @@ export default async function HealthPage() {
             </span>
           </div>
           <div className="flex justify-between">
-            <span className="text-text-muted">OTel Collector gRPC</span>
-            <span className="text-text-secondary font-mono">
-              localhost:4317
-            </span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-text-muted">OTel Collector HTTP</span>
-            <span className="text-text-secondary font-mono">
-              localhost:4318
-            </span>
-          </div>
-          <div className="flex justify-between">
             <span className="text-text-muted">MySQL</span>
             <span className="text-text-secondary font-mono">
               localhost:3306
             </span>
           </div>
           <div className="flex justify-between">
-            <span className="text-text-muted">Ingest endpoint</span>
+            <span className="text-text-muted">PHP Ingest</span>
             <span className="text-text-secondary font-mono">
-              POST /api/ingest
+              POST /v1/traces, /v1/logs
             </span>
           </div>
           <div className="flex justify-between">
-            <span className="text-text-muted">Hook endpoint</span>
+            <span className="text-text-muted">Session Hooks</span>
             <span className="text-text-secondary font-mono">
-              POST /api/hooks
+              POST /v1/session-meta
             </span>
           </div>
         </div>
@@ -118,10 +91,11 @@ export default async function HealthPage() {
         </h3>
         <pre className="text-xs text-text-secondary bg-surface p-3 rounded overflow-x-auto">
 {`# Add to ~/.zshrc or ~/.bashrc
-export OTEL_EXPORTER_OTLP_ENDPOINT="http://localhost:4318"
-export OTEL_TRACES_EXPORTER="otlp"
-export OTEL_LOGS_EXPORTER="otlp"
-export OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf"`}
+export CLAUDE_CODE_ENABLE_TELEMETRY=1
+export OTEL_METRICS_EXPORTER=otlp
+export OTEL_LOGS_EXPORTER=otlp
+export OTEL_EXPORTER_OTLP_ENDPOINT="http://tokentracker.test"
+export OTEL_EXPORTER_OTLP_PROTOCOL=http/json`}
         </pre>
       </div>
     </div>
