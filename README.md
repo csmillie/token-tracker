@@ -79,11 +79,15 @@ The `LocalValetDriver.php` and `index.php` handle routing. Any PHP server that r
 Add to your shell profile (`~/.zshrc` or `~/.bashrc`):
 
 ```bash
-# Point Claude Code's OTLP export at your PHP ingest endpoint
+# Claude Code Tracking — sends OTLP directly to PHP ingest
+export CLAUDE_CODE_ENABLE_TELEMETRY=1
+export OTEL_METRICS_EXPORTER=otlp
+export OTEL_LOGS_EXPORTER=otlp
 export OTEL_EXPORTER_OTLP_ENDPOINT="http://tokentracker.test"
-export OTEL_EXPORTER_OTLP_PROTOCOL="http/json"
-export OTEL_LOGS_EXPORTER="otlp"
+export OTEL_EXPORTER_OTLP_PROTOCOL=http/json
 ```
+
+Replace `http://tokentracker.test` with your PHP ingest URL (e.g. `http://localhost:3046` if using the Next.js dev server directly).
 
 Reload your shell:
 
